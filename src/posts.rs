@@ -1,11 +1,22 @@
-use rocket::{fairing::AdHoc, response::content::RawHtml};
+use std::sync::Arc;
 
-use crate::posts_service::{Post, PostsService};
+use rocket::{fairing::AdHoc, response::content::RawHtml, State};
+
+use crate::posts_service::{ImplPostService, Post};
 use rocket::serde::json::Json;
 
+#[async_trait]
+pub trait PostService {
+    async fn get_post(&self, post_id: String) -> Option<Post>;
+    async fn create_post(&self, post: Post);
+}
+
+struct Services {
+    posts_service: Arc<dyn PostService + Send + Sync>,
+}
 #[get("/<post_id>")]
-async fn get_post(post_id: String) -> RawHtml<String> {
-    let ps = PostsService::new().await;
+async fn get_post(post_id: String, services: &State<Services>) -> RawHtml<String> {
+    let ps = &services.posts_service;
     let post = ps.get_post(post_id).await;
     match post {
         None => return RawHtml(format!("<h1>Not Found</h1>")),
@@ -19,13 +30,17 @@ async fn get_post(post_id: String) -> RawHtml<String> {
 }
 
 #[post("/", format = "json", data = "<new_post>")]
-async fn create_post(new_post: Json<Post>) {
-    let ps = PostsService::new().await;
+async fn create_post(new_post: Json<Post>, services: &State<Services>) {
+    let ps = &services.posts_service;
     ps.create_post(new_post.0).await;
 }
 
-pub fn stage() -> AdHoc {
+pub async fn stage() -> AdHoc {
     AdHoc::on_ignite("Managed Hit Count", |rocket| async {
-        rocket.mount("/posts", routes![get_post, create_post])
+        rocket
+            .manage(Services {
+                posts_service: Arc::from(ImplPostService::new().await),
+            })
+            .mount("/posts", routes![get_post, create_post])
     })
 }
